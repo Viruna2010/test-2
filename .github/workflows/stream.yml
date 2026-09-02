@@ -7,10 +7,14 @@ jobs:
   stream:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Dependencies
+      - name: Fast Install Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils xvfb xdotool
+          # 1. Switch from slow Azure mirror to official fast Ubuntu mirror (Fixes 97 kB/s bottleneck)
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+          
+          # 2. Update and install only essential packages without bloated recommends
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg pulseaudio pulseaudio-utils xvfb xdotool
 
       - name: Setup & Stream 720p 30FPS Smooth
         env:
