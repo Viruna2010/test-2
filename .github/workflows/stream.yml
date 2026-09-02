@@ -7,10 +7,10 @@ jobs:
   stream:
     runs-on: ubuntu-latest
     steps:
-      - name: Install PulseAudio, Xvfb and xdotool
+      - name: Install FFmpeg, PulseAudio, Xvfb and xdotool
         run: |
           sudo apt-get update
-          sudo apt-get install -y pulseaudio pulseaudio-utils xvfb xdotool
+          sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils xvfb xdotool
 
       - name: Setup Audio, Launch Site and Stream
         env:
@@ -35,6 +35,7 @@ jobs:
           echo "Launching Google Chrome with target URL..."
           google-chrome \
             --no-sandbox \
+            --disable-dev-shm-usage \
             --autoplay-policy=no-user-gesture-required \
             --disable-infobars \
             --disable-gpu \
@@ -52,7 +53,7 @@ jobs:
 
           # 5. Capture Video & Virtual Audio, then stream to YouTube
           echo "Starting FFmpeg stream to YouTube..."
-          ffmpeg -hide_banner -loglevel warning \
+          ffmpeg -hide_banner -loglevel info \
             -f x11grab -draw_mouse 0 -video_size 1920x1080 -framerate 30 -i :99.0 \
             -f pulse -i VirtualSink.monitor \
             -c:v libx264 -preset veryfast -b:v 3000k -maxrate 3000k -bufsize 6000k -pix_fmt yuv420p -g 60 \
