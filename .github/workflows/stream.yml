@@ -1,61 +1,70 @@
 name: Stream Vercel Site to YouTube
 
 on:
-  workflow_dispatch: # Actions tab eken manual run karanna
+  workflow_dispatch:
 
 jobs:
   stream:
     runs-on: ubuntu-latest
     steps:
-      - name: Install FFmpeg, PulseAudio, Xvfb and xdotool
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils xvfb xdotool
 
-      - name: Setup Audio, Launch Site and Stream
+      - name: Setup & Stream 720p
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
           TARGET_URL: "https://test-site-gray-sigma.vercel.app/"
         run: |
-          # 1. Start Virtual Display (1080p @ 24-bit color)
-          echo "Starting Virtual Display..."
-          Xvfb :99 -screen 0 1920x1080x24 &
+          # 1. Start Virtual Display in 720p (1280x720)
+          echo "Starting 720p Virtual Display..."
+          Xvfb :99 -screen 0 1280x720x24 &
           export DISPLAY=:99
           sleep 2
 
-          # 2. Setup Virtual Audio Sink via PulseAudio
-          echo "Setting up PulseAudio Virtual Sink..."
+          # 2. Setup Virtual Audio Sink
+          echo "Setting up PulseAudio..."
           pulseaudio --start --exit-idle-time=-1
           sleep 2
           pactl load-module module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink
           pactl set-default-sink VirtualSink
           export PULSE_SINK=VirtualSink
 
-          # 3. Launch Google Chrome in Kiosk mode
-          echo "Launching Google Chrome with target URL..."
+          # 3. Suppress Chrome First Run & Terms of Service prompts
+          echo "Bypassing Chrome First Run prompts..."
+          mkdir -p ~/.config/google-chrome
+          touch ~/.config/google-chrome/'First Run'
+
+          # 4. Launch Chrome in 720p Kiosk mode
+          echo "Launching Google Chrome..."
           google-chrome \
             --no-sandbox \
+            --no-first-run \
+            --no-default-browser-check \
+            --disable-search-engine-choice-screen \
+            --test-type \
             --disable-dev-shm-usage \
             --autoplay-policy=no-user-gesture-required \
             --disable-infobars \
             --disable-gpu \
-            --window-size=1920,1080 \
+            --window-size=1280,720 \
             --window-position=0,0 \
             --start-fullscreen \
             --kiosk "$TARGET_URL" &
 
-          # 4. Wait for page to fully load and simulate a mouse click for audio trigger
-          echo "Waiting 6 seconds for page to load..."
+          # 5. Wait for page load and simulate click at center of 720p (640, 360)
+          echo "Waiting 6 seconds for site to load..."
           sleep 6
-          echo "Simulating click to unlock audio..."
-          xdotool mousemove 960 540 click 1
+          echo "Simulating click for audio trigger..."
+          xdotool mousemove 640 360 click 1
           sleep 2
 
-          # 5. Capture Video & Virtual Audio, then stream to YouTube
-          echo "Starting FFmpeg stream to YouTube..."
-          ffmpeg -hide_banner -loglevel info \
-            -f x11grab -draw_mouse 0 -video_size 1920x1080 -framerate 30 -i :99.0 \
+          # 6. Stream 720p with ultrafast preset to prevent CPU lag
+          echo "Streaming 720p to YouTube Live..."
+          ffmpeg -hide_banner -loglevel warning \
+            -f x11grab -draw_mouse 0 -video_size 1280x720 -framerate 25 -i :99.0 \
             -f pulse -i VirtualSink.monitor \
-            -c:v libx264 -preset veryfast -b:v 3000k -maxrate 3000k -bufsize 6000k -pix_fmt yuv420p -g 60 \
+            -c:v libx264 -preset ultrafast -tune zerolatency -b:v 1500k -maxrate 1500k -bufsize 3000k -pix_fmt yuv420p -g 50 \
             -c:a aac -b:a 128k -ar 44100 \
             -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
