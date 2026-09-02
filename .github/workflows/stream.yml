@@ -7,17 +7,21 @@ jobs:
   stream:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Dependencies
+      - name: Fast Install Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils xvfb xdotool
+          # 1. Fast mirror (Fixes slow download)
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+          
+          # 2. Install tools + ALSA audio bridge
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils xvfb xdotool libasound2-plugins
 
-      - name: Setup & Stream 720p
+      - name: Setup & Stream 720p 30FPS Smooth
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
           TARGET_URL: "https://test-site-gray-sigma.vercel.app/"
         run: |
-          # 1. Start Virtual Display in 720p (1280x720)
+          # 1. Start Virtual Display in 720p
           echo "Starting 720p Virtual Display..."
           Xvfb :99 -screen 0 1280x720x24 &
           export DISPLAY=:99
@@ -31,12 +35,11 @@ jobs:
           pactl set-default-sink VirtualSink
           export PULSE_SINK=VirtualSink
 
-          # 3. Suppress Chrome First Run & Terms of Service prompts
-          echo "Bypassing Chrome First Run prompts..."
+          # 3. Suppress Chrome First Run prompts
           mkdir -p ~/.config/google-chrome
           touch ~/.config/google-chrome/'First Run'
 
-          # 4. Launch Chrome in 720p Kiosk mode
+          # 4. Launch Chrome
           echo "Launching Google Chrome..."
           google-chrome \
             --no-sandbox \
@@ -48,23 +51,33 @@ jobs:
             --autoplay-policy=no-user-gesture-required \
             --disable-infobars \
             --disable-gpu \
+            --disable-background-timer-throttling \
             --window-size=1280,720 \
             --window-position=0,0 \
             --start-fullscreen \
             --kiosk "$TARGET_URL" &
 
-          # 5. Wait for page load and simulate click at center of 720p (640, 360)
-          echo "Waiting 6 seconds for site to load..."
-          sleep 6
-          echo "Simulating click for audio trigger..."
-          xdotool mousemove 640 360 click 1
-          sleep 2
+          # 5. Wait for YouTube API and trigger clicks in a loop (Guaranteed Audio Start)
+          echo "Waiting 10 seconds for YouTube IFrame to initialize..."
+          sleep 10
 
-          # 6. Stream 720p with ultrafast preset to prevent CPU lag
-          echo "Streaming 720p to YouTube Live..."
+          echo "Triggering clicks until audio starts..."
+          for i in {1..6}; do
+            echo "Click attempt $i..."
+            xdotool search --onlyvisible --class "google-chrome" windowfocus || true
+            xdotool mousemove 640 360 click 1 || true
+            xdotool key Return || true
+            xdotool key space || true
+            sleep 2
+          done
+
+          # 6. Stream with Strict Constant 30 FPS
+          echo "Streaming 720p @ 30 FPS to YouTube Live..."
           ffmpeg -hide_banner -loglevel warning \
-            -f x11grab -draw_mouse 0 -video_size 1280x720 -framerate 25 -i :99.0 \
-            -f pulse -i VirtualSink.monitor \
-            -c:v libx264 -preset ultrafast -tune zerolatency -b:v 1500k -maxrate 1500k -bufsize 3000k -pix_fmt yuv420p -g 50 \
+            -thread_queue_size 512 -f x11grab -draw_mouse 0 -video_size 1280x720 -framerate 30 -i :99.0 \
+            -thread_queue_size 512 -f pulse -i VirtualSink.monitor \
+            -c:v libx264 -preset ultrafast -tune zerolatency \
+            -fps_mode cfr -r 30 -g 60 -keyint_min 60 -sc_threshold 0 \
+            -b:v 1800k -maxrate 1800k -bufsize 3600k -pix_fmt yuv420p \
             -c:a aac -b:a 128k -ar 44100 \
             -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
