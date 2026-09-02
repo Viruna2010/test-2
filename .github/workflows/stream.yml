@@ -7,21 +7,21 @@ jobs:
   stream:
     runs-on: ubuntu-latest
     steps:
-      - name: Fast Install Dependencies
+      - name: Fast Install Dependencies (With Audio Bridge)
         run: |
-          # 1. Switch from slow Azure mirror to official fast Ubuntu mirror (Fixes 97 kB/s bottleneck)
+          # 1. Fast mirror to avoid slow Azure throttling
           sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
           
-          # 2. Update and install only essential packages without bloated recommends
+          # 2. Install ffmpeg, pulseaudio, xvfb, xdotool AND libasound2-plugins (Audio bridge)
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ffmpeg pulseaudio pulseaudio-utils xvfb xdotool
+          sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils xvfb xdotool libasound2-plugins
 
       - name: Setup & Stream 720p 30FPS Smooth
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
           TARGET_URL: "https://test-site-gray-sigma.vercel.app/"
         run: |
-          # 1. Start Virtual Display in 720p
+          # 1. Start Virtual Display
           echo "Starting 720p Virtual Display..."
           Xvfb :99 -screen 0 1280x720x24 > /dev/null 2>&1 &
           export DISPLAY=:99
@@ -29,9 +29,9 @@ jobs:
 
           # 2. Setup Virtual Audio Sink
           echo "Setting up PulseAudio..."
-          pulseaudio --start --exit-idle-time=-1 > /dev/null 2>&1 || true
+          pulseaudio --start --exit-idle-time=-1
           sleep 2
-          pactl load-module module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink > /dev/null
+          pactl load-module module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink
           pactl set-default-sink VirtualSink
           export PULSE_SINK=VirtualSink
 
@@ -39,7 +39,7 @@ jobs:
           mkdir -p ~/.config/google-chrome
           touch ~/.config/google-chrome/'First Run'
 
-          # 4. Launch Chrome with ZERO throttling flags
+          # 4. Launch Chrome
           echo "Launching Google Chrome..."
           google-chrome \
             --no-sandbox \
@@ -54,21 +54,22 @@ jobs:
             --autoplay-policy=no-user-gesture-required \
             --disable-infobars \
             --disable-gpu \
-            --disable-background-networking \
-            --disable-sync \
             --window-size=1280,720 \
             --window-position=0,0 \
             --start-fullscreen \
             --kiosk "$TARGET_URL" > /dev/null 2>&1 &
 
-          # 5. Wait for page load and trigger audio click
-          echo "Waiting 6 seconds for site to load..."
-          sleep 6
-          echo "Triggering audio click..."
-          xdotool mousemove 640 360 click 1 2>/dev/null
+          # 5. Focus Chrome window and send Click + Space + Enter
+          echo "Waiting 7 seconds for site to load..."
+          sleep 7
+          echo "Focusing Chrome and unlocking audio..."
+          xdotool search --onlyvisible --class "google-chrome" windowfocus || true
+          xdotool mousemove 640 360 click 1 || true
+          xdotool key Return || true
+          xdotool key space || true
           sleep 2
 
-          # 6. Stream with Strict Constant 30 FPS & 2-Second Keyframes (YouTube Standard)
+          # 6. Stream with Strict Constant 30 FPS & 2-Second Keyframes
           echo "Streaming 720p @ 30 FPS to YouTube Live..."
           ffmpeg -hide_banner -loglevel warning \
             -thread_queue_size 512 -f x11grab -draw_mouse 0 -video_size 1280x720 -framerate 30 -i :99.0 \
