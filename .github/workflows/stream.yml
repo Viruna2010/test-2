@@ -7,27 +7,31 @@ jobs:
   stream:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Dependencies
+      - name: Fast Install Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils xvfb xdotool
+          # 1. Switch to fast mirror (Fixes 17-minute slow download)
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+          
+          # 2. Install all required tools with audio support
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils xvfb xdotool libasound2-plugins
 
-      - name: Setup & Stream 720p (Clean Logs)
+      - name: Setup & Stream 720p 30FPS Smooth
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
           TARGET_URL: "https://test-site-gray-sigma.vercel.app/"
         run: |
-          # 1. Start Virtual Display in 720p (Warnings suppressed)
+          # 1. Start Virtual Display
           echo "Starting 720p Virtual Display..."
-          Xvfb :99 -screen 0 1280x720x24 > /dev/null 2>&1 &
+          Xvfb :99 -screen 0 1280x720x24 &
           export DISPLAY=:99
           sleep 2
 
           # 2. Setup Virtual Audio Sink
           echo "Setting up PulseAudio..."
-          pulseaudio --start --exit-idle-time=-1 > /dev/null 2>&1 || true
+          pulseaudio --start --exit-idle-time=-1
           sleep 2
-          pactl load-module module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink > /dev/null
+          pactl load-module module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink
           pactl set-default-sink VirtualSink
           export PULSE_SINK=VirtualSink
 
@@ -35,7 +39,7 @@ jobs:
           mkdir -p ~/.config/google-chrome
           touch ~/.config/google-chrome/'First Run'
 
-          # 4. Launch Chrome (DBus & background logs muted)
+          # 4. Launch Chrome (ALLOWING full YouTube networking)
           echo "Launching Google Chrome..."
           google-chrome \
             --no-sandbox \
@@ -47,25 +51,27 @@ jobs:
             --autoplay-policy=no-user-gesture-required \
             --disable-infobars \
             --disable-gpu \
-            --disable-background-networking \
-            --disable-sync \
+            --disable-background-timer-throttling \
             --window-size=1280,720 \
             --window-position=0,0 \
             --start-fullscreen \
-            --kiosk "$TARGET_URL" > /dev/null 2>&1 &
+            --kiosk "$TARGET_URL" &
 
-          # 5. Wait for page load and click center for audio trigger
-          echo "Waiting 6 seconds for site to load..."
-          sleep 6
-          echo "Triggering audio click..."
-          xdotool mousemove 640 360 click 1 2>/dev/null
+          # 5. Wait 8 seconds for YouTube IFrame to initialize, then trigger click
+          echo "Waiting 8 seconds for YouTube IFrame to load..."
+          sleep 8
+          echo "Focusing Chrome and clicking to start audio..."
+          xdotool search --onlyvisible --class "google-chrome" windowfocus || true
+          xdotool mousemove 640 360 click 1
           sleep 2
 
-          # 6. Stream with thread queue size optimized
-          echo "Streaming 720p to YouTube Live..."
+          # 6. Stream with Strict Constant 30 FPS (No frame drops / clock lag)
+          echo "Streaming 720p @ 30 FPS to YouTube Live..."
           ffmpeg -hide_banner -loglevel warning \
-            -thread_queue_size 512 -f x11grab -draw_mouse 0 -video_size 1280x720 -framerate 25 -i :99.0 \
+            -thread_queue_size 512 -f x11grab -draw_mouse 0 -video_size 1280x720 -framerate 30 -i :99.0 \
             -thread_queue_size 512 -f pulse -i VirtualSink.monitor \
-            -c:v libx264 -preset ultrafast -tune zerolatency -b:v 1500k -maxrate 1500k -bufsize 3000k -pix_fmt yuv420p -g 50 \
+            -c:v libx264 -preset ultrafast -tune zerolatency \
+            -fps_mode cfr -r 30 -g 60 -keyint_min 60 -sc_threshold 0 \
+            -b:v 1800k -maxrate 1800k -bufsize 3600k -pix_fmt yuv420p \
             -c:a aac -b:a 128k -ar 44100 \
             -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
