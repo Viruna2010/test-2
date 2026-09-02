@@ -1,0 +1,60 @@
+name: Stream Vercel Site to YouTube
+
+on:
+  workflow_dispatch: # Actions tab eken manual run karanna
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PulseAudio, Xvfb and xdotool
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio pulseaudio-utils xvfb xdotool
+
+      - name: Setup Audio, Launch Site and Stream
+        env:
+          YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
+          TARGET_URL: "https://test-site-gray-sigma.vercel.app/"
+        run: |
+          # 1. Start Virtual Display (1080p @ 24-bit color)
+          echo "Starting Virtual Display..."
+          Xvfb :99 -screen 0 1920x1080x24 &
+          export DISPLAY=:99
+          sleep 2
+
+          # 2. Setup Virtual Audio Sink via PulseAudio
+          echo "Setting up PulseAudio Virtual Sink..."
+          pulseaudio --start --exit-idle-time=-1
+          sleep 2
+          pactl load-module module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink
+          pactl set-default-sink VirtualSink
+          export PULSE_SINK=VirtualSink
+
+          # 3. Launch Google Chrome in Kiosk mode
+          echo "Launching Google Chrome with target URL..."
+          google-chrome \
+            --no-sandbox \
+            --autoplay-policy=no-user-gesture-required \
+            --disable-infobars \
+            --disable-gpu \
+            --window-size=1920,1080 \
+            --window-position=0,0 \
+            --start-fullscreen \
+            --kiosk "$TARGET_URL" &
+
+          # 4. Wait for page to fully load and simulate a mouse click for audio trigger
+          echo "Waiting 6 seconds for page to load..."
+          sleep 6
+          echo "Simulating click to unlock audio..."
+          xdotool mousemove 960 540 click 1
+          sleep 2
+
+          # 5. Capture Video & Virtual Audio, then stream to YouTube
+          echo "Starting FFmpeg stream to YouTube..."
+          ffmpeg -hide_banner -loglevel warning \
+            -f x11grab -draw_mouse 0 -video_size 1920x1080 -framerate 30 -i :99.0 \
+            -f pulse -i VirtualSink.monitor \
+            -c:v libx264 -preset veryfast -b:v 3000k -maxrate 3000k -bufsize 6000k -pix_fmt yuv420p -g 60 \
+            -c:a aac -b:a 128k -ar 44100 \
+            -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
